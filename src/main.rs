@@ -9,7 +9,7 @@ use std::{
 use bytebuffer::ByteBuffer;
 use flate2::{write::ZlibEncoder, Compression};
 
-const VERSION: &str = "0.0.4";
+const VERSION: &str = "0.0.5";
 
 fn help() {
     println!("Command usage: kzip [OPTIONS]...");
