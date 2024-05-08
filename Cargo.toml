@@ -1,6 +1,6 @@
 [package]
 name = "kzip"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2021"
 authors = ["Iris Zol <kaiaf@protonmail.com>"]
 license = "GPL-3.0"

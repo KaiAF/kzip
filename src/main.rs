@@ -9,7 +9,7 @@ use std::{
 use bytebuffer::ByteBuffer;
 use flate2::{write::ZlibEncoder, Compression};
 
-const VERSION: &str = "0.0.5";
+const VERSION: &str = "0.0.6";
 
 fn help() {
     println!("Command usage: kzip [OPTIONS]...");
@@ -150,7 +150,7 @@ fn main() {
                 {
                     generate_buffer(
                         &mut buffer,
-                        file_name.unwrap().to_str().unwrap().to_string(),
+                        format!("{}/{}", "./", file_name.unwrap().to_str().unwrap()),
                         &mut content,
                     );
                 }
@@ -172,20 +172,7 @@ fn main() {
                 exit(1);
             }
 
-            if let Err(err) = fs::metadata(output) {
-                if err.kind() == ErrorKind::NotFound {
-                    // directory does not exist, so create it
-                    if let Err(err_dir) = fs::create_dir(output) {
-                        println!("kzip: There was an error creating directory {output}");
-                        println!("{:#?}", err_dir);
-                        exit(1);
-                    }
-                } else {
-                    println!("kzip: There was an error writing to {output}");
-                    println!("{:#?}", err);
-                    exit(1);
-                }
-            }
+            create_dir_if_not_exists(&output);
 
             let mut nof = buffer.read_u32().unwrap();
             println!("Number of files: {nof}");
@@ -205,6 +192,11 @@ fn main() {
                         &buffer.read_bytes(length.try_into().unwrap()).unwrap(),
                         unpacked_length,
                     );
+
+                    let formatted_output = format!("{output}/{file_name}");
+                    let split_paths: Vec<&str> = formatted_output.split("/").collect();
+                    let dir_name = &split_paths[0..split_paths.len() - 1].join("/");
+                    create_dir_if_not_exists(&dir_name);
 
                     let mut file = File::create(format!("{output}/{file_name}")).unwrap();
                     file.write(&content).unwrap();
@@ -242,7 +234,7 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String) {
                 {
                     generate_buffer(
                         &mut buffer,
-                        file_name.to_str().unwrap().to_string(),
+                        format!("{}/{}", dir_name, file_name.to_str().unwrap()),
                         &mut content,
                     );
                 } else {
@@ -338,4 +330,21 @@ fn format_byte(num: f64) -> String {
         * 1_f64;
     let unit = units[exponent as usize];
     format!("{}{} {}", negative, pretty_bytes, unit)
+}
+
+fn create_dir_if_not_exists(output: &str) {
+    if let Err(err) = fs::metadata(output) {
+        if err.kind() == ErrorKind::NotFound {
+            // directory does not exist, so create it
+            if let Err(err_dir) = fs::create_dir_all(output) {
+                println!("kzip: There was an error creating directory {output}");
+                println!("{:#?}", err_dir);
+                exit(1);
+            }
+        } else {
+            println!("kzip: There was an error writing to {output}");
+            println!("{:#?}", err);
+            exit(1);
+        }
+    }
 }
