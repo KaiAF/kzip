@@ -1,7 +1,7 @@
 use std::{
     cmp, env,
     fs::{self, File},
-    io::Write,
+    io::{ErrorKind, Write},
     path::Path,
     process::exit,
 };
@@ -170,6 +170,21 @@ fn main() {
             if mk != 138 {
                 println!("kzip: {}: Invalid KZip header", input);
                 exit(1);
+            }
+
+            if let Err(err) = fs::metadata(output) {
+                if err.kind() == ErrorKind::NotFound {
+                    // directory does not exist, so create it
+                    if let Err(err_dir) = fs::create_dir(output) {
+                        println!("kzip: There was an error creating directory {output}");
+                        println!("{:#?}", err_dir);
+                        exit(1);
+                    }
+                } else {
+                    println!("kzip: There was an error writing to {output}");
+                    println!("{:#?}", err);
+                    exit(1);
+                }
             }
 
             let mut nof = buffer.read_u32().unwrap();
