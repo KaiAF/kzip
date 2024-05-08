@@ -1,5 +1,5 @@
 use std::{
-    env,
+    cmp, env,
     fs::{self, File},
     io::Write,
     path::Path,
@@ -17,6 +17,7 @@ fn help() {
     println!("  --version      Displays the version");
     println!("  --help         Displays this");
     println!("  --extract -x   Tells kzip to extract a .kzip file");
+    println!("  --ls      -l   Displays zipped files inside a .kzip file");
     println!("  --input   -i   Tells kzip what the input directory or file is");
     println!("  --output  -o   Tells kzip what the output directory or file is");
     println!("  --verbose -v   Shows some possibly useful debug information");
@@ -36,23 +37,40 @@ fn version() {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let filtered_args: Vec<&String> = args.iter().filter(|f| !f.starts_with("-")).collect();
     let options: Vec<&String> = args.iter().filter(|f| f.starts_with("-")).collect();
 
     let mut input = "";
     let mut output = "";
     let mut is_extracting = false;
     let mut is_verbose = false;
+    let mut show_files = false;
 
     if options.len() > 0 {
-        for (i, option) in options.iter().enumerate() {
+        for (_i, option) in options.iter().enumerate() {
             match option.as_str() {
                 "--version" => version(),
                 "--help" => help(),
                 "--extract" | "-x" => is_extracting = true,
-                "--input" | "-i" => input = &filtered_args[i + 1],
-                "--output" | "-o" => output = &filtered_args[i + 1],
+                "--input" | "-i" => {
+                    input = {
+                        let index = args
+                            .iter()
+                            .position(|f| f.eq_ignore_ascii_case(option.as_str()))
+                            .unwrap();
+                        &args[index + 1]
+                    }
+                }
+                "--output" | "-o" => {
+                    output = {
+                        let index = args
+                            .iter()
+                            .position(|f| f.eq_ignore_ascii_case(option.as_str()))
+                            .unwrap();
+                        &args[index + 1]
+                    }
+                }
                 "--verbose" | "-v" => is_verbose = true,
+                "--ls" | "-l" => show_files = true,
                 _ => help(),
             }
         }
@@ -60,8 +78,51 @@ fn main() {
         help()
     }
 
+    if output.is_empty() {
+        output = input;
+    }
+
     if is_verbose {
         println!("kzip: {input} {output}");
+    }
+
+    if show_files {
+        if let Ok(file) = fs::read(input) {
+            let mut buffer = ByteBuffer::from_bytes(&file);
+            let mut mk = 0;
+
+            mk += buffer.read_u8().unwrap();
+            mk += buffer.read_u8().unwrap();
+            mk += buffer.read_u8().unwrap();
+
+            if mk != 138 {
+                println!("kzip: {}: Invalid KZip header", input);
+                exit(1);
+            }
+
+            let mut nof = buffer.read_u32().unwrap();
+            println!("Files: {nof}");
+
+            while nof > 0 {
+                if let Ok(file_name) = buffer.read_string() {
+                    let unpacked_length = buffer.read_u64().unwrap();
+                    let length = buffer.read_u64().unwrap();
+                    let _bytes = buffer.read_bytes(length.try_into().unwrap()).unwrap();
+                    println!(
+                        "{file_name}\n  packed: {}, unpacked: {}",
+                        format_byte(length as f64),
+                        format_byte(unpacked_length as f64)
+                    );
+                }
+
+                nof -= 1;
+            }
+
+            exit(0);
+        } else {
+            println!("kzip: could not read {input}");
+            exit(1);
+        }
     }
 
     if !is_extracting {
@@ -239,4 +300,27 @@ fn decode(bytes: &[u8], file_size: u64) -> Vec<u8> {
         .unwrap();
 
     return buf;
+}
+
+/*
+    Stolen from: https://github.com/banyan/rust-pretty-bytes/blob/master/src/converter.rs
+*/
+fn format_byte(num: f64) -> String {
+    let negative = if num.is_sign_positive() { "" } else { "-" };
+    let num = num.abs();
+    let units = ["B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+    if num < 1_f64 {
+        return format!("{}{} {}", negative, num, "B");
+    }
+    let delimiter = 1000_f64;
+    let exponent = cmp::min(
+        (num.ln() / delimiter.ln()).floor() as i32,
+        (units.len() - 1) as i32,
+    );
+    let pretty_bytes = format!("{:.2}", num / delimiter.powi(exponent))
+        .parse::<f64>()
+        .unwrap()
+        * 1_f64;
+    let unit = units[exponent as usize];
+    format!("{}{} {}", negative, pretty_bytes, unit)
 }
