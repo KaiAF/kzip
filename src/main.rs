@@ -169,6 +169,19 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String) {
                         file_name.to_str().unwrap().to_string(),
                         &mut content,
                     );
+                } else {
+                    if let Ok(meta) =
+                        fs::metadata(format!("{}/{}", dir_name, file_name.to_str().unwrap()))
+                    {
+                        if meta.is_dir() {
+                            read_dir(
+                                buffer,
+                                &format!("{}/{}", dir_name, file_name.to_str().unwrap()),
+                            );
+                        }
+                    } else {
+                        println!("kzip: could not read file {}", file_name.to_str().unwrap());
+                    }
                 }
             }
         }
@@ -184,8 +197,17 @@ fn get_number_of_files(dir_name: &String) -> u32 {
 
     match fs::read_dir(dir_name) {
         Ok(dir) => {
-            for _entry in dir {
-                i += 1;
+            for entry in dir {
+                if let Ok(metadata) = fs::metadata(dir_name) {
+                    if metadata.is_dir() {
+                        i += get_number_of_files(&format!(
+                            "{dir_name}/{}",
+                            entry.unwrap().file_name().into_string().unwrap()
+                        ));
+                    } else {
+                        i += 1;
+                    }
+                }
             }
         }
         Err(_err) => {
