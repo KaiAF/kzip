@@ -23,7 +23,6 @@ fn help() {
     println!("  --verbose -v   Shows some possibly useful debug information");
     println!("Information:");
     println!("  KZIP is developed with Rust.");
-    println!("  When zipping files, it does not save the directory listing. This means when extracting, it will just plop them out in the output dir.");
     println!("  When zipping files, KZIP uses GZIP's best compression.");
     println!("Contact me at https://github.com/KaiAF/kzip/issues");
 
