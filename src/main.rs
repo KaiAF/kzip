@@ -65,6 +65,11 @@ fn main() {
     }
 
     if !is_extracting {
+        let output_with_kzip = output.to_owned() + ".kzip";
+        if !output.ends_with(".kzip") {
+            output = output_with_kzip.as_str();
+        }
+
         let nof = get_number_of_files(&input.to_string());
         let mut file = File::create(output).unwrap();
         let mut buffer = ByteBuffer::new();
