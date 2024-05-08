@@ -1,0 +1,31 @@
+[package]
+name = "kzip"
+version = "0.1.0"
+edition = "2021"
+authors = ["Iris Zol <kaiaf@protonmail.com>"]
+license = "GPL-3.0"
+description = "A small custom version of zip using gzip to compress files made by the kai goddess :)"
+homepage = "http://github.com/KaiAF/kzip"
+
+[package.metadata.wix]
+name = "KZip"
+product-icon = "Kai.ico"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bincode = "1.3.3"
+bytebuffer = "2.2.0"
+flate2 = "1.0.30"
+
+[profile.release]
+opt-level = "z"
+debug = false
+strip = true
+debug-assertions = false
+overflow-checks = false
+lto = true
+panic = 'abort'
+incremental = false
+codegen-units = 1
+rpath = false
