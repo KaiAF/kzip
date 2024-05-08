@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "kzip"
-version = "0.1.0"
+version = "0.0.4"
 dependencies = [
  "bincode",
  "bytebuffer",
