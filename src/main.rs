@@ -161,13 +161,13 @@ fn main() {
     } else {
         if let Ok(file) = fs::read(input) {
             let mut buffer = ByteBuffer::from_bytes(&file);
-            let mut mk = 0;
+            let mut mn = 0;
 
-            mk += buffer.read_u8().unwrap();
-            mk += buffer.read_u8().unwrap();
-            mk += buffer.read_u8().unwrap();
+            mn += buffer.read_u8().unwrap();
+            mn += buffer.read_u8().unwrap();
+            mn += buffer.read_u8().unwrap();
 
-            if mk != 138 {
+            if mn != 138 {
                 println!("kzip: {}: Invalid KZip header", input);
                 exit(1);
             }
