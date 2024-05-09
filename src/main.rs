@@ -2,7 +2,7 @@ use std::{
     cmp, env,
     fs::{self, File, Metadata},
     io::{ErrorKind, Write},
-    path::Path,
+    path::{self, Path},
     process::exit,
     time::UNIX_EPOCH,
 };
@@ -170,12 +170,10 @@ fn main() {
                 read_dir(&mut buffer, &input.to_string(), is_verbose);
             } else {
                 let file_name = Path::new(&input).file_name();
-                if let Ok(mut content) =
-                    fs::read(format!("{}/{}", "./", file_name.unwrap().to_str().unwrap()))
-                {
+                if let Ok(mut content) = fs::read(file_name.unwrap().to_str().unwrap()) {
                     generate_buffer(
                         &mut buffer,
-                        format!("{}/{}", "./", file_name.unwrap().to_str().unwrap()),
+                        file_name.unwrap().to_str().unwrap().to_string(),
                         &mut content,
                         &metadata,
                     );
@@ -184,6 +182,7 @@ fn main() {
         }
 
         file.write(&buffer.clone().into_vec()).unwrap();
+        println!("kzip: Done zipping");
     } else {
         if let Ok(file) = fs::read(input) {
             let mut buffer = ByteBuffer::from_bytes(&file);
@@ -224,12 +223,17 @@ fn main() {
                         unpacked_length,
                     );
 
-                    let formatted_output = format!("{output}/{file_name}");
-                    let split_paths: Vec<&str> = formatted_output.split("/").collect();
-                    let dir_name = &split_paths[0..split_paths.len() - 1].join("/");
+                    let formatted_output = format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
+                    let split_paths: Vec<&str> =
+                        formatted_output.split(path::MAIN_SEPARATOR).collect();
+                    let dir_name =
+                        &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
+
                     create_dir_if_not_exists(&dir_name);
 
-                    let mut file = File::create(format!("{output}/{file_name}")).unwrap();
+                    let mut file =
+                        File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
+                            .unwrap();
                     file.write(&content).unwrap();
                     if is_verbose {
                         println!("Unzipped {}", file_name);
@@ -238,13 +242,14 @@ fn main() {
 
                 nof -= 1;
             }
+
+            println!("kzip: Done unzipping");
         } else {
             println!("kzip: Could not open kzip file {}", input);
             exit(1);
         }
     }
 
-    println!("kzip: Done unzipping");
     exit(0);
 }
 
@@ -283,23 +288,34 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
             for result in dir_result {
                 let entry = result.unwrap();
                 let file_name = entry.file_name();
-                if let Ok(mut content) =
-                    fs::read(format!("{}/{}", dir_name, file_name.to_str().unwrap()))
-                {
+                if let Ok(mut content) = fs::read(format!(
+                    "{}{}{}",
+                    dir_name,
+                    path::MAIN_SEPARATOR,
+                    file_name.to_str().unwrap()
+                )) {
                     if verbose {
                         println!("kzip: reading file: {}", file_name.to_str().unwrap());
                     }
 
                     generate_buffer(
                         &mut buffer,
-                        format!("{}/{}", dir_name, file_name.to_str().unwrap()),
+                        format!(
+                            "{}{}{}",
+                            dir_name,
+                            path::MAIN_SEPARATOR,
+                            file_name.to_str().unwrap()
+                        ),
                         &mut content,
                         &entry.metadata().unwrap(),
                     );
                 } else {
-                    if let Ok(meta) =
-                        fs::metadata(format!("{}/{}", dir_name, file_name.to_str().unwrap()))
-                    {
+                    if let Ok(meta) = fs::metadata(format!(
+                        "{}{}{}",
+                        dir_name,
+                        path::MAIN_SEPARATOR,
+                        file_name.to_str().unwrap()
+                    )) {
                         if meta.is_dir() {
                             if verbose {
                                 println!("kzip: reading directory: {}", dir_name);
@@ -307,7 +323,12 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
 
                             read_dir(
                                 buffer,
-                                &format!("{}/{}", dir_name, file_name.to_str().unwrap()),
+                                &format!(
+                                    "{}{}{}",
+                                    dir_name,
+                                    path::MAIN_SEPARATOR,
+                                    file_name.to_str().unwrap()
+                                ),
                                 verbose,
                             );
                         }
