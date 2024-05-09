@@ -231,7 +231,9 @@ fn main() {
 
                     let mut file = File::create(format!("{output}/{file_name}")).unwrap();
                     file.write(&content).unwrap();
-                    println!("Unzipped {}", file_name);
+                    if is_verbose {
+                        println!("Unzipped {}", file_name);
+                    }
                 }
 
                 nof -= 1;
@@ -242,6 +244,7 @@ fn main() {
         }
     }
 
+    println!("kzip: Done unzipping");
     exit(0);
 }
 
