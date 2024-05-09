@@ -1,13 +1,15 @@
 use std::{
     cmp, env,
-    fs::{self, File},
+    fs::{self, File, Metadata},
     io::{ErrorKind, Write},
     path::Path,
     process::exit,
+    time::UNIX_EPOCH,
 };
 
 use bytebuffer::ByteBuffer;
 use flate2::{write::ZlibEncoder, Compression};
+use time::OffsetDateTime;
 
 const VERSION: &str = "0.0.6";
 
@@ -82,7 +84,7 @@ fn main() {
     }
 
     if is_verbose {
-        println!("kzip: {input} {output}");
+        println!("kzip:\ninput: {input}\noutput: {output}");
     }
 
     if show_files {
@@ -99,16 +101,28 @@ fn main() {
                 exit(1);
             }
 
+            let version = buffer.read_u32().unwrap();
             let mut nof = buffer.read_u32().unwrap();
-            println!("Files: {nof}");
+            let og_nof = nof.clone();
+            let mut total_length = 0;
+            let mut total_unpacked_length = 0;
 
             while nof > 0 {
                 if let Ok(file_name) = buffer.read_string() {
+                    let created_at = buffer.read_u64().unwrap();
+                    let modified = buffer.read_u64().unwrap();
+
                     let unpacked_length = buffer.read_u64().unwrap();
                     let length = buffer.read_u64().unwrap();
                     let _bytes = buffer.read_bytes(length.try_into().unwrap()).unwrap();
+
+                    total_length += length;
+                    total_unpacked_length += unpacked_length;
+
                     println!(
-                        "{file_name}\n  packed: {}, unpacked: {}",
+                        "{file_name}\n  Created At: {}, Last Modified: {}\n  packed: {}, unpacked: {}",
+                        OffsetDateTime::from_unix_timestamp(created_at as i64).unwrap().date(),
+                        OffsetDateTime::from_unix_timestamp(modified as i64).unwrap().date(),
                         format_byte(length as f64),
                         format_byte(unpacked_length as f64)
                     );
@@ -116,6 +130,17 @@ fn main() {
 
                 nof -= 1;
             }
+
+            if is_verbose {
+                println!("Version used to zip: {version}");
+            }
+
+            println!("Total Files: {og_nof}");
+            println!("Total Packed Size: {}", format_byte(total_length as f64));
+            println!(
+                "Total Unpacked Size: {}",
+                format_byte(total_unpacked_length as f64)
+            );
 
             exit(0);
         } else {
@@ -137,11 +162,12 @@ fn main() {
         buffer.write_u8(10);
         buffer.write_u8(116);
         // magic number = cat
+        buffer.write_u32(VERSION.replace(".", "").parse::<u32>().unwrap()); // version
         buffer.write_u32(nof); // amount of files
 
         if let Ok(metadata) = fs::metadata(&input.to_string()) {
             if metadata.is_dir() {
-                read_dir(&mut buffer, &input.to_string());
+                read_dir(&mut buffer, &input.to_string(), is_verbose);
             } else {
                 let file_name = Path::new(&input).file_name();
                 if let Ok(mut content) =
@@ -151,6 +177,7 @@ fn main() {
                         &mut buffer,
                         format!("{}/{}", "./", file_name.unwrap().to_str().unwrap()),
                         &mut content,
+                        &metadata,
                     );
                 }
             }
@@ -173,6 +200,7 @@ fn main() {
 
             create_dir_if_not_exists(&output);
 
+            let _version = buffer.read_u32().unwrap();
             let mut nof = buffer.read_u32().unwrap();
             println!("Number of files: {nof}");
             while nof > 0 {
@@ -180,6 +208,10 @@ fn main() {
                     if is_verbose {
                         println!("kzip: File name: {file_name}");
                     }
+
+                    // todo: modify the file and put the correct created at and modified dates;
+                    let _created_at = buffer.read_u64().unwrap();
+                    let _modified = buffer.read_u64().unwrap();
 
                     let unpacked_length = buffer.read_u64().unwrap();
                     let length = buffer.read_u64().unwrap();
@@ -213,16 +245,36 @@ fn main() {
     exit(0);
 }
 
-fn generate_buffer(buffer: &mut ByteBuffer, file_name: String, content: &mut Vec<u8>) {
+fn generate_buffer(
+    buffer: &mut ByteBuffer,
+    file_name: String,
+    content: &mut Vec<u8>,
+    metadata: &Metadata,
+) {
+    let modified = metadata
+        .modified()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let created_at = metadata
+        .created()
+        .unwrap()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
     // buffer.write_u8(file_name.len() as u8);
     buffer.write_string(&file_name);
+    buffer.write_u64(created_at);
+    buffer.write_u64(modified);
     buffer.write_u64(content.len() as u64);
     let encoded_content = &mut encode(content);
     buffer.write_u64(encoded_content.len() as u64);
     buffer.write(&encoded_content).unwrap();
 }
 
-fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String) {
+fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
     match fs::read_dir(dir_name) {
         Ok(dir_result) => {
             for result in dir_result {
@@ -231,19 +283,29 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String) {
                 if let Ok(mut content) =
                     fs::read(format!("{}/{}", dir_name, file_name.to_str().unwrap()))
                 {
+                    if verbose {
+                        println!("kzip: reading file: {}", file_name.to_str().unwrap());
+                    }
+
                     generate_buffer(
                         &mut buffer,
                         format!("{}/{}", dir_name, file_name.to_str().unwrap()),
                         &mut content,
+                        &entry.metadata().unwrap(),
                     );
                 } else {
                     if let Ok(meta) =
                         fs::metadata(format!("{}/{}", dir_name, file_name.to_str().unwrap()))
                     {
                         if meta.is_dir() {
+                            if verbose {
+                                println!("kzip: reading directory: {}", dir_name);
+                            }
+
                             read_dir(
                                 buffer,
                                 &format!("{}/{}", dir_name, file_name.to_str().unwrap()),
+                                verbose,
                             );
                         }
                     } else {
