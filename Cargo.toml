@@ -1,6 +1,6 @@
 [package]
 name = "kzip"
-version = "0.0.6"
+version = "0.0.7"
 edition = "2021"
 authors = ["Iris Zol <kaiaf@protonmail.com>"]
 license = "GPL-3.0"
@@ -17,6 +17,7 @@ product-icon = "Kai.ico"
 bincode = "1.3.3"
 bytebuffer = "2.2.0"
 flate2 = "1.0.30"
+sha256 = "1.5.0"
 time = "0.3.36"
 
 [profile.release]

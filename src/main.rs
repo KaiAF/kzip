@@ -1,5 +1,7 @@
 use std::{
-    cmp, env,
+    cmp,
+    collections::HashMap,
+    env,
     fs::{self, File, Metadata},
     io::{ErrorKind, Write},
     path::{self, Path},
@@ -9,9 +11,10 @@ use std::{
 
 use bytebuffer::ByteBuffer;
 use flate2::{write::ZlibEncoder, Compression};
+use sha256::digest;
 use time::OffsetDateTime;
 
-const VERSION: &str = "0.0.6";
+const VERSION: &str = "0.0.7";
 
 fn help() {
     println!("Command usage: kzip [OPTIONS]...");
@@ -101,31 +104,41 @@ fn main() {
                 exit(1);
             }
 
-            let version = buffer.read_u32().unwrap();
+            let version = buffer.read_string().unwrap();
             let mut nof = buffer.read_u32().unwrap();
             let og_nof = nof.clone();
             let mut total_length = 0;
             let mut total_unpacked_length = 0;
 
             while nof > 0 {
+                let is_duplicate: u8 = buffer.read_u8().unwrap();
                 if let Ok(file_name) = buffer.read_string() {
                     let created_at = buffer.read_u64().unwrap();
                     let modified = buffer.read_u64().unwrap();
 
-                    let unpacked_length = buffer.read_u64().unwrap();
-                    let length = buffer.read_u64().unwrap();
-                    let _bytes = buffer.read_bytes(length.try_into().unwrap()).unwrap();
+                    if is_duplicate == 1 {
+                        let _bytes = buffer.read_u32().unwrap();
+                        println!("{file_name} (duplicate)");
+                    } else {
+                        let unpacked_length = buffer.read_u64().unwrap();
+                        let length = buffer.read_u64().unwrap();
+                        let _bytes = buffer.read_bytes(length.try_into().unwrap()).unwrap();
 
-                    total_length += length;
-                    total_unpacked_length += unpacked_length;
+                        total_length += length;
+                        total_unpacked_length += unpacked_length;
 
-                    println!(
-                        "{file_name}\n  Created At: {}, Last Modified: {}\n  packed: {}, unpacked: {}",
-                        OffsetDateTime::from_unix_timestamp(created_at as i64).unwrap().date(),
-                        OffsetDateTime::from_unix_timestamp(modified as i64).unwrap().date(),
-                        format_byte(length as f64),
-                        format_byte(unpacked_length as f64)
-                    );
+                        if is_verbose {
+                            println!(
+                                "{file_name}\n  Created At: {}, Last Modified: {}\n  packed: {}, unpacked: {}",
+                                OffsetDateTime::from_unix_timestamp(created_at as i64).unwrap().date(),
+                                OffsetDateTime::from_unix_timestamp(modified as i64).unwrap().date(),
+                                format_byte(length as f64),
+                                format_byte(unpacked_length as f64)
+                            );
+                        } else {
+                            println!("{file_name}");
+                        }
+                    }
                 }
 
                 nof -= 1;
@@ -141,6 +154,7 @@ fn main() {
                 "Total Unpacked Size: {}",
                 format_byte(total_unpacked_length as f64)
             );
+            println!("Compression: {}%", total_unpacked_length / total_length);
 
             exit(0);
         } else {
@@ -156,18 +170,19 @@ fn main() {
         }
 
         let nof = get_number_of_files(&input.to_string());
+        let mut hashes: HashMap<String, usize> = HashMap::new();
         let mut file = File::create(output).unwrap();
         let mut buffer = ByteBuffer::new();
         buffer.write_u8(12);
         buffer.write_u8(10);
         buffer.write_u8(116);
         // magic number = cat
-        buffer.write_u32(VERSION.replace(".", "").parse::<u32>().unwrap()); // version
+        buffer.write_string(VERSION); // version
         buffer.write_u32(nof); // amount of files
 
         if let Ok(metadata) = fs::metadata(&input.to_string()) {
             if metadata.is_dir() {
-                read_dir(&mut buffer, &input.to_string(), is_verbose);
+                read_dir(&mut buffer, &input.to_string(), is_verbose, &mut hashes);
             } else {
                 let file_name = Path::new(&input).file_name();
                 if let Ok(mut content) = fs::read(file_name.unwrap().to_str().unwrap()) {
@@ -176,6 +191,7 @@ fn main() {
                         file_name.unwrap().to_str().unwrap().to_string(),
                         &mut content,
                         &metadata,
+                        &mut hashes,
                     );
                 }
             }
@@ -185,6 +201,8 @@ fn main() {
         println!("kzip: Done zipping");
     } else {
         if let Ok(file) = fs::read(input) {
+            let mut index = 0;
+            let mut cached: HashMap<u32, String> = HashMap::new();
             let mut buffer = ByteBuffer::from_bytes(&file);
             let mut mn = 0;
 
@@ -199,10 +217,11 @@ fn main() {
 
             create_dir_if_not_exists(&output);
 
-            let _version = buffer.read_u32().unwrap();
+            let _version = buffer.read_string().unwrap();
             let mut nof = buffer.read_u32().unwrap();
             println!("Number of files: {nof}");
             while nof > 0 {
+                let is_duplicate: u8 = buffer.read_u8().unwrap();
                 if let Ok(file_name) = buffer.read_string() {
                     if is_verbose {
                         println!("kzip: File name: {file_name}");
@@ -212,30 +231,61 @@ fn main() {
                     let _created_at = buffer.read_u64().unwrap();
                     let _modified = buffer.read_u64().unwrap();
 
-                    let unpacked_length = buffer.read_u64().unwrap();
-                    let length = buffer.read_u64().unwrap();
-                    if is_verbose {
-                        println!("kzip: File content length: {length}");
-                    }
+                    if is_duplicate == 1 {
+                        // handle duplication
+                        let saved_index = buffer.read_u32().unwrap();
+                        let cached_file_name = cached.get(&saved_index).unwrap();
+                        let content = fs::read(cached_file_name).unwrap();
 
-                    let content = decode(
-                        &buffer.read_bytes(length.try_into().unwrap()).unwrap(),
-                        unpacked_length,
-                    );
+                        let formatted_output =
+                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
+                        let split_paths: Vec<&str> =
+                            formatted_output.split(path::MAIN_SEPARATOR).collect();
+                        let dir_name =
+                            &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
 
-                    let formatted_output = format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
-                    let split_paths: Vec<&str> =
-                        formatted_output.split(path::MAIN_SEPARATOR).collect();
-                    let dir_name =
-                        &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
+                        create_dir_if_not_exists(&dir_name);
 
-                    create_dir_if_not_exists(&dir_name);
+                        let mut file =
+                            File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
+                                .unwrap();
 
-                    let mut file =
-                        File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
-                            .unwrap();
-                    file.write(&content).unwrap();
-                    if is_verbose {
+                        file.write(&content).unwrap();
+                        println!("Unzipped duplicate file {}", file_name);
+                    } else {
+                        let unpacked_length = buffer.read_u64().unwrap();
+                        let length = buffer.read_u64().unwrap();
+                        if is_verbose {
+                            println!("kzip: File content length: {length}");
+                        }
+
+                        let content = decode(
+                            &buffer.read_bytes(length.try_into().unwrap()).unwrap(),
+                            unpacked_length,
+                        );
+
+                        let formatted_output =
+                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
+                        let split_paths: Vec<&str> =
+                            formatted_output.split(path::MAIN_SEPARATOR).collect();
+                        let dir_name =
+                            &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
+
+                        create_dir_if_not_exists(&dir_name);
+
+                        let mut file =
+                            File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
+                                .unwrap();
+
+                        file.write(&content).unwrap();
+
+                        cached.insert(
+                            index,
+                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR),
+                        );
+
+                        index += 1;
+
                         println!("Unzipped {}", file_name);
                     }
                 }
@@ -258,6 +308,7 @@ fn generate_buffer(
     file_name: String,
     content: &mut Vec<u8>,
     metadata: &Metadata,
+    hashes: &mut HashMap<String, usize>,
 ) {
     let modified = metadata
         .modified()
@@ -272,17 +323,40 @@ fn generate_buffer(
         .unwrap()
         .as_secs();
 
+    let file_hash = digest(content.clone());
+    let is_duplicate = if !metadata.is_dir() {
+        hashes.contains_key(&file_hash)
+    } else {
+        false
+    };
+
+    buffer.write_u8(if is_duplicate { 1 } else { 0 }); // tell kzip if file is duplicate
+
     // buffer.write_u8(file_name.len() as u8);
     buffer.write_string(&file_name);
     buffer.write_u64(created_at);
     buffer.write_u64(modified);
-    buffer.write_u64(content.len() as u64);
-    let encoded_content = &mut encode(content);
-    buffer.write_u64(encoded_content.len() as u64);
-    buffer.write(&encoded_content).unwrap();
+    if is_duplicate {
+        // there is a duplicate file found
+        // going to tell kzip this to save some space
+        buffer.write_u32((*hashes.get(&file_hash).unwrap()).try_into().unwrap());
+    } else {
+        buffer.write_u64(content.len() as u64);
+        let encoded_content = &mut encode(content);
+        buffer.write_u64(encoded_content.len() as u64);
+        buffer.write(&encoded_content).unwrap();
+        if !metadata.is_dir() {
+            hashes.insert(file_hash, hashes.len());
+        }
+    }
 }
 
-fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
+fn read_dir(
+    mut buffer: &mut ByteBuffer,
+    dir_name: &String,
+    verbose: bool,
+    hashes: &mut HashMap<String, usize>,
+) {
     match fs::read_dir(dir_name) {
         Ok(dir_result) => {
             for result in dir_result {
@@ -308,6 +382,7 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
                         ),
                         &mut content,
                         &entry.metadata().unwrap(),
+                        hashes,
                     );
                 } else {
                     if let Ok(meta) = fs::metadata(format!(
@@ -327,9 +402,10 @@ fn read_dir(mut buffer: &mut ByteBuffer, dir_name: &String, verbose: bool) {
                                     "{}{}{}",
                                     dir_name,
                                     path::MAIN_SEPARATOR,
-                                    file_name.to_str().unwrap()
+                                    file_name.to_str().unwrap(),
                                 ),
                                 verbose,
+                                hashes,
                             );
                         }
                     } else {
