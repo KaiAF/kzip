@@ -1,9 +1,9 @@
 use std::{
-    cmp,
+    cmp::{self},
     collections::HashMap,
     env,
-    fs::{self, File, Metadata},
-    io::{ErrorKind, Write},
+    fs::{self, File, Metadata, OpenOptions},
+    io::{BufReader, ErrorKind, Read, Write},
     path::{self, Path},
     process::exit,
     time::UNIX_EPOCH,
@@ -43,8 +43,8 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let options: Vec<&String> = args.iter().filter(|f| f.starts_with("-")).collect();
 
-    let mut input = "";
-    let mut output = "";
+    let mut input = "".to_string();
+    let mut output = "".to_string();
     let mut is_extracting = false;
     let mut is_verbose = false;
     let mut show_files = false;
@@ -61,7 +61,7 @@ fn main() {
                             .iter()
                             .position(|f| f.eq_ignore_ascii_case(option.as_str()))
                             .unwrap();
-                        &args[index + 1]
+                        args[index + 1].to_string()
                     }
                 }
                 "--output" | "-o" => {
@@ -70,7 +70,7 @@ fn main() {
                             .iter()
                             .position(|f| f.eq_ignore_ascii_case(option.as_str()))
                             .unwrap();
-                        &args[index + 1]
+                        args[index + 1].to_string()
                     }
                 }
                 "--verbose" | "-v" => is_verbose = true,
@@ -83,96 +83,40 @@ fn main() {
     }
 
     if output.is_empty() {
-        output = input;
+        output = input.clone();
     }
 
     if is_verbose {
-        println!("kzip:\ninput: {input}\noutput: {output}");
+        println!("input: {input}\noutput: {output}");
     }
 
     if show_files {
-        if let Ok(file) = fs::read(input) {
-            let mut buffer = ByteBuffer::from_bytes(&file);
-            let mut mk = 0;
-
-            mk += buffer.read_u8().unwrap();
-            mk += buffer.read_u8().unwrap();
-            mk += buffer.read_u8().unwrap();
-
-            if mk != 138 {
-                println!("kzip: {}: Invalid KZip header", input);
-                exit(1);
-            }
-
-            let version = buffer.read_string().unwrap();
-            let mut nof = buffer.read_u32().unwrap();
-            let og_nof = nof.clone();
-            let mut total_length = 0;
-            let mut total_unpacked_length = 0;
-
-            while nof > 0 {
-                let is_duplicate: u8 = buffer.read_u8().unwrap();
-                if let Ok(file_name) = buffer.read_string() {
-                    let created_at = buffer.read_u64().unwrap();
-                    let modified = buffer.read_u64().unwrap();
-
-                    if is_duplicate == 1 {
-                        let _bytes = buffer.read_u32().unwrap();
-                        println!("{file_name} (duplicate)");
-                    } else {
-                        let unpacked_length = buffer.read_u64().unwrap();
-                        let length = buffer.read_u64().unwrap();
-                        let _bytes = buffer.read_bytes(length.try_into().unwrap()).unwrap();
-
-                        total_length += length;
-                        total_unpacked_length += unpacked_length;
-
-                        if is_verbose {
-                            println!(
-                                "{file_name}\n  Created At: {}, Last Modified: {}\n  packed: {}, unpacked: {}",
-                                OffsetDateTime::from_unix_timestamp(created_at as i64).unwrap().date(),
-                                OffsetDateTime::from_unix_timestamp(modified as i64).unwrap().date(),
-                                format_byte(length as f64),
-                                format_byte(unpacked_length as f64)
-                            );
-                        } else {
-                            println!("{file_name}");
-                        }
-                    }
-                }
-
-                nof -= 1;
-            }
-
-            if is_verbose {
-                println!("Version used to zip: {version}");
-            }
-
-            println!("Total Files: {og_nof}");
-            println!("Total Packed Size: {}", format_byte(total_length as f64));
-            println!(
-                "Total Unpacked Size: {}",
-                format_byte(total_unpacked_length as f64)
-            );
-            println!("Compression: {}%", total_unpacked_length / total_length);
-
-            exit(0);
-        } else {
-            println!("kzip: could not read {input}");
-            exit(1);
-        }
+        read_kzip_file(&input, &output, is_verbose, false);
     }
 
     if !is_extracting {
         let output_with_kzip = output.to_owned() + ".kzip";
         if !output.ends_with(".kzip") {
-            output = output_with_kzip.as_str();
+            output = output_with_kzip;
         }
 
-        let nof = get_number_of_files(&input.to_string());
+        let nof = get_number_of_files(&input);
         let mut hashes: HashMap<String, usize> = HashMap::new();
-        let mut file = File::create(output).unwrap();
         let mut buffer = ByteBuffer::new();
+
+        if let Ok(_meta) = fs::metadata(&output) {
+            output = output.clone().replace(".kzip", "")
+                + "."
+                + &get_number_of_files(&output).to_string()
+                + ".kzip";
+        }
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(output)
+            .unwrap();
+
         buffer.write_u8(12);
         buffer.write_u8(10);
         buffer.write_u8(116);
@@ -180,13 +124,24 @@ fn main() {
         buffer.write_string(VERSION); // version
         buffer.write_u32(nof); // amount of files
 
+        file.write(&buffer.clone().into_vec()).unwrap();
+        buffer.clear();
+        buffer.flush().unwrap();
+
         if let Ok(metadata) = fs::metadata(&input.to_string()) {
             if metadata.is_dir() {
-                read_dir(&mut buffer, &input.to_string(), is_verbose, &mut hashes);
+                read_dir(
+                    &mut file,
+                    &mut buffer,
+                    &input.to_string(),
+                    is_verbose,
+                    &mut hashes,
+                );
             } else {
                 let file_name = Path::new(&input).file_name();
                 if let Ok(mut content) = fs::read(file_name.unwrap().to_str().unwrap()) {
                     generate_buffer(
+                        &mut file,
                         &mut buffer,
                         file_name.unwrap().to_str().unwrap().to_string(),
                         &mut content,
@@ -197,113 +152,17 @@ fn main() {
             }
         }
 
-        file.write(&buffer.clone().into_vec()).unwrap();
         println!("kzip: Done zipping");
     } else {
-        if let Ok(file) = fs::read(input) {
-            let mut index = 0;
-            let mut cached: HashMap<u32, String> = HashMap::new();
-            let mut buffer = ByteBuffer::from_bytes(&file);
-            let mut mn = 0;
-
-            mn += buffer.read_u8().unwrap();
-            mn += buffer.read_u8().unwrap();
-            mn += buffer.read_u8().unwrap();
-
-            if mn != 138 {
-                println!("kzip: {}: Invalid KZip header", input);
-                exit(1);
-            }
-
-            create_dir_if_not_exists(&output);
-
-            let _version = buffer.read_string().unwrap();
-            let mut nof = buffer.read_u32().unwrap();
-            println!("Number of files: {nof}");
-            while nof > 0 {
-                let is_duplicate: u8 = buffer.read_u8().unwrap();
-                if let Ok(file_name) = buffer.read_string() {
-                    if is_verbose {
-                        println!("kzip: File name: {file_name}");
-                    }
-
-                    // todo: modify the file and put the correct created at and modified dates;
-                    let _created_at = buffer.read_u64().unwrap();
-                    let _modified = buffer.read_u64().unwrap();
-
-                    if is_duplicate == 1 {
-                        // handle duplication
-                        let saved_index = buffer.read_u32().unwrap();
-                        let cached_file_name = cached.get(&saved_index).unwrap();
-                        let content = fs::read(cached_file_name).unwrap();
-
-                        let formatted_output =
-                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
-                        let split_paths: Vec<&str> =
-                            formatted_output.split(path::MAIN_SEPARATOR).collect();
-                        let dir_name =
-                            &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
-
-                        create_dir_if_not_exists(&dir_name);
-
-                        let mut file =
-                            File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
-                                .unwrap();
-
-                        file.write(&content).unwrap();
-                        println!("Unzipped duplicate file {}", file_name);
-                    } else {
-                        let unpacked_length = buffer.read_u64().unwrap();
-                        let length = buffer.read_u64().unwrap();
-                        if is_verbose {
-                            println!("kzip: File content length: {length}");
-                        }
-
-                        let content = decode(
-                            &buffer.read_bytes(length.try_into().unwrap()).unwrap(),
-                            unpacked_length,
-                        );
-
-                        let formatted_output =
-                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
-                        let split_paths: Vec<&str> =
-                            formatted_output.split(path::MAIN_SEPARATOR).collect();
-                        let dir_name =
-                            &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
-
-                        create_dir_if_not_exists(&dir_name);
-
-                        let mut file =
-                            File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR))
-                                .unwrap();
-
-                        file.write(&content).unwrap();
-
-                        cached.insert(
-                            index,
-                            format!("{output}{}{file_name}", path::MAIN_SEPARATOR),
-                        );
-
-                        index += 1;
-
-                        println!("Unzipped {}", file_name);
-                    }
-                }
-
-                nof -= 1;
-            }
-
-            println!("kzip: Done unzipping");
-        } else {
-            println!("kzip: Could not open kzip file {}", input);
-            exit(1);
-        }
+        read_kzip_file(&input, &output, is_verbose, true);
+        println!("kzip: Done unzipping");
     }
 
     exit(0);
 }
 
 fn generate_buffer(
+    file: &mut File,
     buffer: &mut ByteBuffer,
     file_name: String,
     content: &mut Vec<u8>,
@@ -349,9 +208,14 @@ fn generate_buffer(
             hashes.insert(file_hash, hashes.len());
         }
     }
+
+    file.write(&buffer.clone().into_vec()).unwrap();
+    buffer.clear();
+    buffer.flush().unwrap();
 }
 
 fn read_dir(
+    mut file: &mut File,
     mut buffer: &mut ByteBuffer,
     dir_name: &String,
     verbose: bool,
@@ -373,6 +237,7 @@ fn read_dir(
                     }
 
                     generate_buffer(
+                        &mut file,
                         &mut buffer,
                         format!(
                             "{}{}{}",
@@ -397,6 +262,7 @@ fn read_dir(
                             }
 
                             read_dir(
+                                file,
                                 buffer,
                                 &format!(
                                     "{}{}{}",
@@ -462,7 +328,7 @@ fn encode(bytes: &mut [u8]) -> Vec<u8> {
 fn decode(bytes: &[u8], file_size: u64) -> Vec<u8> {
     let input = bytes;
     let mut decompressor = flate2::Decompress::new(true);
-    let mut buf = Vec::with_capacity(file_size.try_into().unwrap());
+    let mut buf = Vec::with_capacity(file_size as usize);
     decompressor
         .decompress_vec(&input, &mut buf, flate2::FlushDecompress::None)
         .unwrap();
@@ -508,4 +374,158 @@ fn create_dir_if_not_exists(output: &str) {
             exit(1);
         }
     }
+}
+
+fn read_file_into_bytes_until(input: &String, offset: u32, until: u32) -> Vec<u8> {
+    let mut bytes: Vec<u8> = vec![0; until as usize];
+    if let Ok(file) = File::open(input) {
+        let mut reader = BufReader::new(file);
+        reader.seek_relative(offset.into()).unwrap();
+        reader.read(&mut bytes).unwrap();
+    } else {
+        println!("kzip: could not read {input}");
+        exit(1);
+    }
+
+    return bytes;
+}
+
+fn read_kzip_file(input: &String, output: &str, is_verbose: bool, is_extract: bool) {
+    let mut index = 0;
+    let mut cached: HashMap<u32, String> = HashMap::new();
+    let mut rpos = 0;
+    let mut bytes = read_file_into_bytes_until(&input, 0, 16);
+    let mut buffer = ByteBuffer::from_bytes(&bytes);
+    let mut mk = 0;
+
+    mk += buffer.read_u8().unwrap();
+    mk += buffer.read_u8().unwrap();
+    mk += buffer.read_u8().unwrap();
+
+    if mk != 138 {
+        println!("kzip: {}: Invalid KZip header", input);
+        exit(1);
+    }
+
+    let _version = buffer.read_string().unwrap();
+    let mut nof = buffer.read_u32().unwrap();
+    let og_nof = nof.clone();
+    let mut total_length: u64 = 0;
+    let mut total_unpacked_length: u64 = 0;
+
+    rpos += buffer.get_rpos();
+    buffer.clear();
+    buffer.flush().unwrap();
+
+    while nof > 0 {
+        bytes = read_file_into_bytes_until(&input, rpos as u32, 1024);
+        buffer = ByteBuffer::from_bytes(&bytes);
+
+        let is_duplicate = buffer.read_u8().unwrap();
+        let file_name = parse_file_path(buffer.read_string().unwrap());
+        let created_at = buffer.read_u64().unwrap();
+        let modified = buffer.read_u64().unwrap();
+
+        if is_duplicate == 1 {
+            let file_index = buffer.read_u32().unwrap();
+            rpos += buffer.get_rpos();
+
+            if !is_extract {
+                println!("{file_name} (duplicate)");
+            } else {
+                let cached_name = cached.get(&file_index).unwrap();
+                let content = fs::read(cached_name).unwrap();
+                write_file(output, &file_name, &content);
+            }
+        } else {
+            let unpacked_length = buffer.read_u64().unwrap();
+            let length = buffer.read_u64().unwrap();
+
+            if is_extract {
+                rpos += buffer.get_rpos();
+
+                let file_bytes = read_file_into_bytes_until(&input, rpos as u32, length as u32);
+
+                let mut file_buffer = ByteBuffer::from(file_bytes);
+                let bytes = file_buffer.read_bytes(length as usize).unwrap();
+                let content = decode(&bytes, unpacked_length);
+
+                write_file(output, &file_name, &content);
+
+                rpos += length as usize;
+            } else {
+                rpos += buffer.get_rpos() + length as usize;
+            }
+
+            total_length += length;
+            total_unpacked_length += unpacked_length;
+
+            cached.insert(
+                index,
+                format!("{output}{}{file_name}", path::MAIN_SEPARATOR),
+            );
+
+            index += 1;
+
+            if !is_extract {
+                if is_verbose {
+                    println!(
+                        "{file_name}\n  Created At: {}, Last Modified: {}\n  Packed: {}, Unpacked: {}",
+                        OffsetDateTime::from_unix_timestamp(created_at as i64)
+                            .unwrap()
+                            .date(),
+                        OffsetDateTime::from_unix_timestamp(modified as i64)
+                            .unwrap()
+                            .date(),
+                        format_byte(length as f64),
+                        format_byte(unpacked_length as f64)
+                    );
+                } else {
+                    println!("{file_name}");
+                }
+            }
+        }
+
+        buffer.clear();
+        buffer.flush().unwrap();
+        nof -= 1;
+    }
+
+    if !is_extract {
+        println!("Total Files: {og_nof}");
+        println!("Total Packed Size: {}", format_byte(total_length as f64));
+        println!(
+            "Total Unpacked Size: {}",
+            format_byte(total_unpacked_length as f64)
+        );
+        println!("Compression: {}%", total_unpacked_length / total_length);
+    }
+
+    exit(0);
+}
+
+fn write_file(output: &str, file_name: &String, content: &Vec<u8>) {
+    let formatted_output = format!("{output}{}{file_name}", path::MAIN_SEPARATOR);
+    let split_paths: Vec<&str> = formatted_output.split(path::MAIN_SEPARATOR).collect();
+    let dir_name = &split_paths[0..split_paths.len() - 1].join(path::MAIN_SEPARATOR_STR);
+
+    create_dir_if_not_exists(&dir_name);
+
+    let mut file = File::create(format!("{output}{}{file_name}", path::MAIN_SEPARATOR)).unwrap();
+
+    file.write(&content).unwrap();
+}
+
+fn parse_file_path(mut path: String) -> String {
+    path = path.clone().replace("/", path::MAIN_SEPARATOR_STR);
+    path = path.clone().replace(r"\", path::MAIN_SEPARATOR_STR);
+    if path.starts_with(&format!("..{}", path::MAIN_SEPARATOR).to_string()) {
+        path = path.replace(&format!("..{}", path::MAIN_SEPARATOR).to_string(), "");
+    }
+
+    if path.starts_with(&format!(".{}", path::MAIN_SEPARATOR).to_string()) {
+        path = path.replace(&format!(".{}", path::MAIN_SEPARATOR).to_string(), "");
+    }
+
+    return path;
 }
