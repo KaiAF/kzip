@@ -14,7 +14,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use sha256::digest;
 use time::OffsetDateTime;
 
-const VERSION: &str = "0.0.7";
+const VERSION: &str = "0.0.8";
 
 fn help() {
     println!("Command usage: kzip [OPTIONS]...");
