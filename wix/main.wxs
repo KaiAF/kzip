@@ -102,6 +102,13 @@
                             KeyPath='yes'/>
                     </Component>
                     
+                    <Component Id='Icon' Guid='*'>
+                        <File Id='IconFile'
+                            DiskId='1'
+                            Source='wix\icon.ico'
+                            KeyPath='yes'/>
+                    </Component>
+                    
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='Path' Guid='39EE3C04-FC46-4F5C-955E-1C740E2FE769' KeyPath='yes'>
                             <Environment
@@ -120,6 +127,19 @@
                                 DiskId='1'
                                 Source='$(var.CargoTargetBinDir)\kzip.exe'
                                 KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary1' Guid='*'>
+                            <File
+                                Id='exe1'
+                                Name='gui.exe'
+                                DiskId='1'
+                                Source='wix\gui.exe'
+                                KeyPath='yes'/>
+                            <ProgId Id="kzip.kzipfile" Description="KZip file type" Icon="IconFile">
+                              <Extension Id="kzip" ContentType="application/kzip">
+                                <Verb Id="open" Command="open" TargetFile="exe1" Argument='"%1"'/>
+                              </Extension>
+                            </ProgId>
                         </Component>
                     </Directory>
                 </Directory>
@@ -140,8 +160,10 @@
               the license sidecar file from the installer.
             -->
             <ComponentRef Id='License'/>
+            <ComponentRef Id='Icon'/>
             
             <ComponentRef Id='binary0'/>
+            <ComponentRef Id='binary1'/>
 
             <Feature
                 Id='Environment'
